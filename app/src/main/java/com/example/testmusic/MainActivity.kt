@@ -35,16 +35,35 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.pm.PackageManager
 import android.provider.MediaStore
+import android.widget.Toast
 import androidx.annotation.RequiresPermission
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.media3.session.MediaSession
+import androidx.test.core.app.ActivityScenario
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var exoPlayer: ExoPlayer
     private val channelId = "music_player_channel"
-
+    companion object{
+        private const val MEDIA_MUSIC_PER=100
+        private const val NOTIFICATION_PER=100
+    }
+    fun checkPermissions(permission: String, requestCode: Int){
+        if(ContextCompat.checkSelfPermission(this, permission)== PackageManager.PERMISSION_DENIED){
+            ActivityCompat.requestPermissions(this,arrayOf(permission),requestCode)
+        }else{
+            Toast.makeText(this, "Permission already granted", Toast.LENGTH_SHORT).show()
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        checkPermissions(Manifest.permission.READ_MEDIA_AUDIO,MEDIA_MUSIC_PER)
+        checkPermissions(Manifest.permission.POST_NOTIFICATIONS,NOTIFICATION_PER)
 
         exoPlayer = ExoPlayer.Builder(this).build()
         createNotificationChannel()
@@ -81,10 +100,30 @@ class MainActivity : ComponentActivity() {
 
         NotificationManagerCompat.from(this).notify(1, notification)
     }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String?>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if(requestCode==MEDIA_MUSIC_PER){
+            if(grantResults.isNotEmpty()&& grantResults[0]== PackageManager.PERMISSION_GRANTED){
+                Toast.makeText(this,"Permission granted", Toast.LENGTH_SHORT)
+            }else{
+                Toast.makeText(this,"Permission denied", Toast.LENGTH_SHORT)
+            }
+        }else if(requestCode==NOTIFICATION_PER){
+            if(grantResults.isNotEmpty()&& grantResults[0]== PackageManager.PERMISSION_GRANTED){
+                Toast.makeText(this,"Permission granted", Toast.LENGTH_SHORT)
+            }else{
+                Toast.makeText(this,"Permission denied", Toast.LENGTH_SHORT)
+        }
+    }
 }
 
 data class AudioFile(val uri: Uri, val title: String)
-
+@Preview
 @Composable
 fun MusicPlayerApp(exoPlayer: ExoPlayer, activity: MainActivity) {
     val context = activity
@@ -125,7 +164,9 @@ fun MusicPlayerApp(exoPlayer: ExoPlayer, activity: MainActivity) {
     }
 
     // ---------------- UI ----------------
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp)) {
         Text("Music Player", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp))
 
@@ -206,4 +247,5 @@ fun loadAudioFiles(context: Context): List<AudioFile> {
         }
     }
     return audioList
+}
 }
