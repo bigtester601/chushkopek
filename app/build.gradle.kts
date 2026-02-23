@@ -5,17 +5,25 @@ plugins {
 }
 
 android {
-    namespace = "com.example.testmusic"
+    namespace = "com.example.eqmusicplayer"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.testmusic"
-        minSdk = 26
+        applicationId = "com.example.eqmusicplayer"
+        minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        val soundCloudClientId = providers.gradleProperty("SOUNDCLOUD_CLIENT_ID").orElse("").get()
+        val soundCloudRedirectUri = providers.gradleProperty("SOUNDCLOUD_REDIRECT_URI")
+            .orElse("eqmusicplayer://soundcloud-callback")
+            .get()
+        val soundCloudClientSecret = providers.gradleProperty("SOUNDCLOUD_CLIENT_SECRET").orElse("").get()
+        resValue("string", "soundcloud_client_id", soundCloudClientId)
+        resValue("string", "soundcloud_redirect_uri", soundCloudRedirectUri)
+        resValue("string", "soundcloud_client_secret", soundCloudClientSecret)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,6 +46,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -50,7 +59,10 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.cardview)
+    implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -58,84 +70,4 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    val appcompat_version = "1.7.1"
-
-    implementation("androidx.appcompat:appcompat:$appcompat_version")
-    // For loading and tinting drawables on older versions of the platform
-    implementation("androidx.appcompat:appcompat-resources:$appcompat_version")
-}
-dependencies {
-    val media3_version = "1.8.0"
-
-    // For media playback using ExoPlayer
-    implementation("androidx.media3:media3-exoplayer:$media3_version")
-
-    // For DASH playback support with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-dash:$media3_version")
-    // For HLS playback support with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-hls:$media3_version")
-    // For SmoothStreaming playback support with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-smoothstreaming:$media3_version")
-    // For RTSP playback support with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-rtsp:$media3_version")
-    // For MIDI playback support with ExoPlayer (see additional dependency requirements in
-    // https://github.com/androidx/media/blob/release/libraries/decoder_midi/README.md)
-    //implementation("androidx.media3:media3-exoplayer-midi:$media3_version")
-    // For ad insertion using the Interactive Media Ads SDK with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-ima:$media3_version")
-
-    // For loading data using the Cronet network stack
-    implementation("androidx.media3:media3-datasource-cronet:$media3_version")
-    // For loading data using the OkHttp network stack
-    implementation("androidx.media3:media3-datasource-okhttp:$media3_version")
-    // For loading data using librtmp
-    implementation("androidx.media3:media3-datasource-rtmp:$media3_version")
-
-    // For building media playback UIs using Compose
-    implementation("androidx.media3:media3-ui-compose:$media3_version")
-    // For building media playback UIs using Views
-    implementation("androidx.media3:media3-ui:$media3_version")
-    // For building media playback UIs using Jetpack Compose
-    implementation("androidx.media3:media3-ui-compose:$media3_version")
-    // For building media playback UIs for Android TV using the Jetpack Leanback library
-    implementation("androidx.media3:media3-ui-leanback:$media3_version")
-
-    // For exposing and controlling media sessions
-    implementation("androidx.media3:media3-session:$media3_version")
-
-    // For extracting data from media containers
-    implementation("androidx.media3:media3-extractor:$media3_version")
-
-    // For integrating with Cast
-    implementation("androidx.media3:media3-cast:$media3_version")
-
-    // For scheduling background operations using Jetpack Work's WorkManager with ExoPlayer
-    implementation("androidx.media3:media3-exoplayer-workmanager:$media3_version")
-
-    // For transforming media files
-    implementation("androidx.media3:media3-transformer:$media3_version")
-
-    // For applying effects on video frames
-    implementation("androidx.media3:media3-effect:$media3_version")
-
-    // For muxing media files
-    implementation("androidx.media3:media3-muxer:$media3_version")
-
-    // Utilities for testing media components (including ExoPlayer components)
-    implementation("androidx.media3:media3-test-utils:$media3_version")
-    // Utilities for testing media components (including ExoPlayer components) via Robolectric
-    implementation("androidx.media3:media3-test-utils-robolectric:$media3_version")
-
-    // Common functionality for reading and writing media containers
-    implementation("androidx.media3:media3-container:$media3_version")
-    // Common functionality for media database components
-    implementation("androidx.media3:media3-database:$media3_version")
-    // Common functionality for media decoders
-    implementation("androidx.media3:media3-decoder:$media3_version")
-    // Common functionality for loading data
-    implementation("androidx.media3:media3-datasource:$media3_version")
-    // Common functionality used across multiple media libraries
-    implementation("androidx.media3:media3-common:$media3_version")
-    // Common Kotlin-specific functionality
-    implementation("androidx.media3:media3-common-ktx:$media3_version")
 }

@@ -19,5 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "test music"
+rootProject.name = "eqMusicPlayer"
 include(":app")
+ 
