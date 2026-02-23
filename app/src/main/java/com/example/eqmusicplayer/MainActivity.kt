@@ -2,8 +2,10 @@ package com.example.eqmusicplayer
 
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -35,18 +37,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.audio.AudioSink
-import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.eqmusicplayer.audio.ParametricEqAudioProcessor
+import com.example.eqmusicplayer.playback.MusicPlaybackService
+import com.example.eqmusicplayer.playback.PlaybackRepository
 import com.example.eqmusicplayer.soundcloud.SoundCloudClient
 import com.example.eqmusicplayer.soundcloud.SoundCloudClient.PkceSession
 import kotlinx.coroutines.Dispatchers
@@ -55,50 +56,21 @@ import kotlinx.coroutines.withContext
 import kotlin.math.exp
 import kotlin.math.ln
 
-@UnstableApi
 class MainActivity : ComponentActivity() {
 
-    private lateinit var player: ExoPlayer
-    private val eqProcessor = ParametricEqAudioProcessor()
     private val soundCloudClient = SoundCloudClient()
+    private lateinit var player: ExoPlayer
     private var soundCloudAuthCallback by mutableStateOf<SoundCloudAuthCallback?>(null)
 
-    @OptIn(UnstableApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        player = PlaybackRepository.getPlayer(this)
         handleSoundCloudCallback(intent)
-
-        val renderersFactory = object : DefaultRenderersFactory(this) {
-            override fun buildAudioSink(
-                context: Context,
-                enableFloatOutput: Boolean,
-                enableAudioTrackPlaybackParams: Boolean
-            ): AudioSink {
-                return DefaultAudioSink.Builder(context)
-                    .setEnableFloatOutput(enableFloatOutput)
-                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(arrayOf(eqProcessor))
-                    .build()
-            }
-        }
-
-        player = ExoPlayer.Builder(this, renderersFactory)
-            .build()
-            .apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
-                        .build(),
-                    true
-                )
-            }
 
         setContent {
             MaterialTheme {
                 MusicPlayerScreen(
                     player = player,
-                    eqProcessor = eqProcessor,
                     soundCloudClient = soundCloudClient,
                     soundCloudClientId = getString(R.string.soundcloud_client_id),
                     soundCloudRedirectUri = getString(R.string.soundcloud_redirect_uri),
@@ -114,11 +86,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleSoundCloudCallback(intent)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        player.release()
     }
 
     private fun handleSoundCloudCallback(intent: Intent?) {
@@ -160,7 +127,6 @@ private const val AUTH_ACCESS_TOKEN_KEY = "access_token"
 @Composable
 private fun MusicPlayerScreen(
     player: ExoPlayer,
-    eqProcessor: ParametricEqAudioProcessor,
     soundCloudClient: SoundCloudClient,
     soundCloudClientId: String,
     soundCloudRedirectUri: String,
@@ -168,7 +134,7 @@ private fun MusicPlayerScreen(
     authCallback: SoundCloudAuthCallback?,
     onAuthCallbackConsumed: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var soundCloudUrl by remember { mutableStateOf("") }
@@ -187,7 +153,7 @@ private fun MusicPlayerScreen(
     }
 
     fun pushEqSettings() {
-        eqProcessor.setBands(
+        PlaybackRepository.updateEqBands(
             eqBands.map {
                 ParametricEqAudioProcessor.Band(
                     frequencyHz = it.frequencyHz,
@@ -279,20 +245,17 @@ private fun MusicPlayerScreen(
             return@rememberLauncherForActivityResult
         }
 
-        val mediaItem = MediaItem.Builder()
-            .setUri(uri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(uri.lastPathSegment ?: "Local track")
-                    .build()
-            )
-            .build()
-
-        player.setMediaItem(mediaItem)
-        player.prepare()
-        player.play()
-        statusMessage = "Playing local file."
-        currentTitle = resolveTitle(player)
+        scope.launch {
+            val mediaItem = withContext(Dispatchers.IO) {
+                buildLocalMediaItem(context, uri)
+            }
+            ensurePlaybackServiceRunning(context)
+            player.setMediaItem(mediaItem)
+            player.prepare()
+            player.play()
+            statusMessage = "Playing local file."
+            currentTitle = resolveTitle(player)
+        }
     }
 
     Column(
@@ -315,7 +278,12 @@ private fun MusicPlayerScreen(
                 Text("Open Local File")
             }
             Button(onClick = {
-                if (isPlaying) player.pause() else player.play()
+                if (isPlaying) {
+                    player.pause()
+                } else {
+                    ensurePlaybackServiceRunning(context)
+                    player.play()
+                }
             }) {
                 Text(if (isPlaying) "Pause" else "Play")
             }
@@ -353,8 +321,7 @@ private fun MusicPlayerScreen(
                     session = session
                 )
 
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authUrl))
-                context.startActivity(intent)
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(authUrl)))
                 statusMessage = "Complete SoundCloud login in browser."
             }) {
                 Text("Connect SoundCloud")
@@ -398,6 +365,7 @@ private fun MusicPlayerScreen(
                                     .build()
                             )
                             .build()
+                        ensurePlaybackServiceRunning(context)
                         player.setMediaItem(mediaItem)
                         player.prepare()
                         player.play()
@@ -466,6 +434,60 @@ private fun MusicPlayerScreen(
     }
 }
 
+private fun ensurePlaybackServiceRunning(context: Context) {
+    context.startService(Intent(context, MusicPlaybackService::class.java))
+}
+
+private fun buildLocalMediaItem(context: Context, uri: Uri): MediaItem {
+    val displayName = queryDisplayName(context, uri)
+
+    var title: String? = null
+    var artist: String? = null
+    var album: String? = null
+    var artwork: ByteArray? = null
+
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(context, uri)
+        title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+        artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+        album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+        artwork = retriever.embeddedPicture
+    } catch (_: Exception) {
+        // Keep fallback metadata if extraction fails.
+    } finally {
+        runCatching { retriever.release() }
+    }
+
+    val mediaMetadataBuilder = MediaMetadata.Builder()
+        .setTitle(title ?: displayName ?: uri.lastPathSegment ?: "Local track")
+
+    if (!artist.isNullOrBlank()) {
+        mediaMetadataBuilder.setArtist(artist)
+    }
+    if (!album.isNullOrBlank()) {
+        mediaMetadataBuilder.setAlbumTitle(album)
+    }
+    if (artwork != null) {
+        mediaMetadataBuilder.setArtworkData(artwork, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+    }
+
+    return MediaItem.Builder()
+        .setUri(uri)
+        .setMediaMetadata(mediaMetadataBuilder.build())
+        .build()
+}
+
+private fun queryDisplayName(context: Context, uri: Uri): String? {
+    val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
+    return context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (nameIndex < 0) return@use null
+        cursor.getString(nameIndex)
+    }
+}
+
 private fun loadSoundCloudAccessToken(context: Context): String {
     return context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
         .getString(AUTH_ACCESS_TOKEN_KEY, "")
@@ -487,6 +509,10 @@ private fun clearSoundCloudAccessToken(context: Context) {
 }
 
 private fun resolveTitle(player: Player): String {
+    val metadataTitle = player.mediaMetadata.title?.toString()
+    if (!metadataTitle.isNullOrBlank()) {
+        return metadataTitle
+    }
     val explicit = player.currentMediaItem?.mediaMetadata?.title?.toString()
     if (!explicit.isNullOrBlank()) {
         return explicit
