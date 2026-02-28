@@ -180,22 +180,38 @@ class SoundCloudClient(
     }
 
     private fun executeGetJson(url: String, accessToken: String?): JSONObject {
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .get()
-
+        val attempts = mutableListOf<Pair<String, String?>>()
         if (!accessToken.isNullOrBlank()) {
-            requestBuilder.header("Authorization", "OAuth $accessToken")
+            val tokenUrl = url.toHttpUrl().newBuilder()
+                .addQueryParameter("oauth_token", accessToken)
+                .build()
+                .toString()
+            attempts += tokenUrl to "Bearer $accessToken"
+            attempts += tokenUrl to "OAuth $accessToken"
+        }
+        attempts += url to null
+
+        var lastFailureMessage: String? = null
+        for ((attemptUrl, authHeader) in attempts) {
+            val requestBuilder = Request.Builder()
+                .url(attemptUrl)
+                .get()
+            if (!authHeader.isNullOrBlank()) {
+                requestBuilder.header("Authorization", authHeader)
+            }
+
+            okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    require(body.isNotBlank()) { "SoundCloud returned an empty response." }
+                    return JSONObject(body)
+                }
+                val trimmedBody = body.take(300).replace('\n', ' ')
+                lastFailureMessage = "SoundCloud request failed: HTTP ${response.code}. Body: $trimmedBody"
+            }
         }
 
-        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
-            require(response.isSuccessful) {
-                "SoundCloud request failed: HTTP ${response.code}"
-            }
-            val body = response.body?.string().orEmpty()
-            require(body.isNotBlank()) { "SoundCloud returned an empty response." }
-            return JSONObject(body)
-        }
+        error(lastFailureMessage ?: "SoundCloud request failed.")
     }
 
     private fun base64UrlNoPadding(bytes: ByteArray): String {

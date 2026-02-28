@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.example.eqmusicplayer.audio.ParametricEqAudioProcessor
 
+@UnstableApi
 object PlaybackRepository {
 
     @Volatile
@@ -21,9 +22,14 @@ object PlaybackRepository {
 
     @Volatile
     private var currentBands: List<ParametricEqAudioProcessor.Band> = listOf(
+        ParametricEqAudioProcessor.Band(frequencyHz = 60f, q = 1f, gainDb = 0f),
         ParametricEqAudioProcessor.Band(frequencyHz = 120f, q = 1f, gainDb = 0f),
+        ParametricEqAudioProcessor.Band(frequencyHz = 250f, q = 1f, gainDb = 0f),
+        ParametricEqAudioProcessor.Band(frequencyHz = 500f, q = 1f, gainDb = 0f),
         ParametricEqAudioProcessor.Band(frequencyHz = 1000f, q = 1f, gainDb = 0f),
-        ParametricEqAudioProcessor.Band(frequencyHz = 5000f, q = 1f, gainDb = 0f)
+        ParametricEqAudioProcessor.Band(frequencyHz = 2500f, q = 1f, gainDb = 0f),
+        ParametricEqAudioProcessor.Band(frequencyHz = 6000f, q = 1f, gainDb = 0f),
+        ParametricEqAudioProcessor.Band(frequencyHz = 16_000f, q = 1f, gainDb = 0f)
     )
 
     @OptIn(UnstableApi::class)
@@ -69,6 +75,7 @@ object PlaybackRepository {
         }
     }
 
+    @UnstableApi
     fun updateEqBands(bands: List<ParametricEqAudioProcessor.Band>) {
         currentBands = bands
         eqProcessor?.setBands(bands)

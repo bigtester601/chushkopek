@@ -18,6 +18,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:label="Баскаса"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.EqMusicPlayer">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

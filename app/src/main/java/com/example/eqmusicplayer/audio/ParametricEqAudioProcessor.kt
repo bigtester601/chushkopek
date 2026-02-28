@@ -35,9 +35,14 @@ class ParametricEqAudioProcessor : BaseAudioProcessor() {
 
     @Volatile
     private var bands: List<Band> = listOf(
+        Band(frequencyHz = 60f, q = 1f, gainDb = 0f),
         Band(frequencyHz = 120f, q = 1f, gainDb = 0f),
+        Band(frequencyHz = 250f, q = 1f, gainDb = 0f),
+        Band(frequencyHz = 500f, q = 1f, gainDb = 0f),
         Band(frequencyHz = 1000f, q = 1f, gainDb = 0f),
-        Band(frequencyHz = 5000f, q = 1f, gainDb = 0f)
+        Band(frequencyHz = 2500f, q = 1f, gainDb = 0f),
+        Band(frequencyHz = 6000f, q = 1f, gainDb = 0f),
+        Band(frequencyHz = 16_000f, q = 1f, gainDb = 0f)
     )
 
     @Volatile
