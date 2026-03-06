@@ -124,20 +124,31 @@ class SoundCloudClient(
     ): Result<String> {
         return runCatching {
             require(trackUrl.isNotBlank()) { "Enter a SoundCloud track URL." }
-            require(clientId.isNotBlank()) {
+            require(clientId.isNotBlank() || !accessToken.isNullOrBlank()) {
                 "SoundCloud client ID is missing. Set SOUNDCLOUD_CLIENT_ID in gradle.properties."
             }
 
-            val resolveUrl = "https://api-v2.soundcloud.com/resolve".toHttpUrl().newBuilder()
-                .addQueryParameter("url", trackUrl)
-                .addQueryParameter("client_id", clientId)
-                .build()
+            val resolveCandidates = buildResolveCandidates(trackUrl, clientId, accessToken)
+            var resolveJson: JSONObject? = null
+            var lastResolveFailure: Throwable? = null
+            for (resolveUrl in resolveCandidates) {
+                runCatching { executeGetJson(resolveUrl, accessToken) }
+                    .onSuccess {
+                        resolveJson = it
+                        return@onSuccess
+                    }
+                    .onFailure {
+                        lastResolveFailure = it
+                    }
+                if (resolveJson != null) break
+            }
+            val resolved = resolveJson ?: throw (lastResolveFailure
+                ?: IllegalStateException("SoundCloud resolve failed."))
 
-            val resolveJson = executeGetJson(resolveUrl.toString(), accessToken)
             val mediaOwner = when {
-                resolveJson.optString("kind") == "track" -> resolveJson
-                resolveJson.optString("kind") == "playlist" -> {
-                    val tracks = resolveJson.optJSONArray("tracks") ?: JSONArray()
+                resolved.optString("kind") == "track" -> resolved
+                resolved.optString("kind") == "playlist" -> {
+                    val tracks = resolved.optJSONArray("tracks") ?: JSONArray()
                     require(tracks.length() > 0) { "Playlist has no playable tracks." }
                     tracks.optJSONObject(0) ?: error("Playlist track entry is invalid.")
                 }
@@ -145,23 +156,55 @@ class SoundCloudClient(
             }
 
             val transcodings = mediaOwner.optJSONObject("media")?.optJSONArray("transcodings") ?: JSONArray()
-            require(transcodings.length() > 0) { "No playable transcodings found for this track." }
+            val transcodingEndpoint = pickBestTranscoding(transcodings)?.optString("url").orEmpty()
 
-            val selectedTranscoding = pickBestTranscoding(transcodings)
-                ?: error("No supported SoundCloud transcoding (progressive/hls) was found.")
-            val transcodingEndpoint = selectedTranscoding.optString("url")
-            require(transcodingEndpoint.isNotBlank()) { "SoundCloud transcoding URL missing." }
+            if (transcodingEndpoint.isNotBlank()) {
+                val streamUrlBuilder = transcodingEndpoint.toHttpUrl().newBuilder()
+                if (accessToken.isNullOrBlank() && clientId.isNotBlank()) {
+                    streamUrlBuilder.addQueryParameter("client_id", clientId)
+                }
+                val streamUrl = streamUrlBuilder.build().toString()
+                val streamJson = executeGetJson(streamUrl, accessToken)
+                val finalUrl = streamJson.optString("url")
+                require(finalUrl.isNotBlank()) { "SoundCloud stream URL is empty." }
+                return@runCatching finalUrl
+            }
 
-            val streamUrl = transcodingEndpoint.toHttpUrl().newBuilder()
-                .addQueryParameter("client_id", clientId)
-                .build()
-                .toString()
+            // Legacy API fallback: some responses expose stream_url directly.
+            val legacyStreamUrl = mediaOwner.optString("stream_url")
+            require(legacyStreamUrl.isNotBlank()) { "No playable SoundCloud stream endpoint found." }
+            val legacyStreamEndpoint = legacyStreamUrl.toHttpUrl().newBuilder().apply {
+                if (clientId.isNotBlank()) {
+                    addQueryParameter("client_id", clientId)
+                }
+            }.build().toString()
 
-            val streamJson = executeGetJson(streamUrl, accessToken)
-            val finalUrl = streamJson.optString("url")
-            require(finalUrl.isNotBlank()) { "SoundCloud stream URL is empty." }
-            finalUrl
+            val legacyJson = executeGetJson(legacyStreamEndpoint, accessToken)
+            val finalLegacyUrl = legacyJson.optString("http_mp3_128_url")
+                .ifBlank { legacyJson.optString("url") }
+            require(finalLegacyUrl.isNotBlank()) { "SoundCloud legacy stream URL is empty." }
+            finalLegacyUrl
         }
+    }
+
+    private fun buildResolveCandidates(trackUrl: String, clientId: String, accessToken: String?): List<String> {
+        val candidates = mutableListOf<String>()
+
+        val v2Builder = "https://api-v2.soundcloud.com/resolve".toHttpUrl().newBuilder()
+            .addQueryParameter("url", trackUrl)
+        if (accessToken.isNullOrBlank() && clientId.isNotBlank()) {
+            v2Builder.addQueryParameter("client_id", clientId)
+        }
+        candidates += v2Builder.build().toString()
+
+        val legacyBuilder = "https://api.soundcloud.com/resolve".toHttpUrl().newBuilder()
+            .addQueryParameter("url", trackUrl)
+        if (clientId.isNotBlank()) {
+            legacyBuilder.addQueryParameter("client_id", clientId)
+        }
+        candidates += legacyBuilder.build().toString()
+
+        return candidates.distinct()
     }
 
     private fun pickBestTranscoding(transcodings: JSONArray): JSONObject? {
@@ -181,18 +224,32 @@ class SoundCloudClient(
 
     private fun executeGetJson(url: String, accessToken: String?): JSONObject {
         val attempts = mutableListOf<Pair<String, String?>>()
-        if (!accessToken.isNullOrBlank()) {
-            val tokenUrl = url.toHttpUrl().newBuilder()
+        val hasToken = !accessToken.isNullOrBlank()
+        if (hasToken) {
+            val parsedUrl = url.toHttpUrl()
+            val tokenUrl = parsedUrl.newBuilder()
                 .addQueryParameter("oauth_token", accessToken)
                 .build()
                 .toString()
+            val tokenOnlyUrl = parsedUrl.newBuilder()
+                .removeAllQueryParameters("client_id")
+                .addQueryParameter("oauth_token", accessToken)
+                .build()
+                .toString()
+
+            // Try header-based and token-query auth with and without client_id.
+            attempts += url to "OAuth $accessToken"
+            attempts += url to "Bearer $accessToken"
             attempts += tokenUrl to "Bearer $accessToken"
             attempts += tokenUrl to "OAuth $accessToken"
+            attempts += tokenOnlyUrl to "Bearer $accessToken"
+            attempts += tokenOnlyUrl to "OAuth $accessToken"
         }
+        // Unauthenticated fallback should be last.
         attempts += url to null
 
         var lastFailureMessage: String? = null
-        for ((attemptUrl, authHeader) in attempts) {
+        for ((attemptUrl, authHeader) in attempts.distinct()) {
             val requestBuilder = Request.Builder()
                 .url(attemptUrl)
                 .get()
@@ -211,6 +268,9 @@ class SoundCloudClient(
             }
         }
 
+        if (!hasToken && lastFailureMessage?.contains("authorization header", ignoreCase = true) == true) {
+            error("SoundCloud access token missing. Reconnect SoundCloud, then try again.")
+        }
         error(lastFailureMessage ?: "SoundCloud request failed.")
     }
 
