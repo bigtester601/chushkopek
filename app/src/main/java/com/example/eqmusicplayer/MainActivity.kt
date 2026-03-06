@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -149,6 +150,13 @@ private const val AUTH_ACCESS_TOKEN_KEY = "access_token"
 private const val AUTH_PKCE_STATE_KEY = "pkce_state"
 private const val AUTH_PKCE_VERIFIER_KEY = "pkce_verifier"
 private const val EQ_BANDS_KEY = "eq_bands"
+private const val SOUNDCLOUD_PLAY_DEBOUNCE_MS = 2_000L
+private const val SOUNDCLOUD_STREAM_CACHE_TTL_MS = 15 * 60 * 1000L
+
+private data class CachedSoundCloudStream(
+    val streamUrl: String,
+    val cachedAtElapsedMs: Long
+)
 
 private data class PendingPkceAuthSession(
     val state: String,
@@ -181,6 +189,10 @@ private fun MusicPlayerScreen(
     var pendingPkceSession by remember { mutableStateOf(loadPendingPkceSession(context)) }
     var eqEditTarget by remember { mutableStateOf<EqEditTarget?>(null) }
     var eqEditInput by remember { mutableStateOf("") }
+    var lastSoundCloudPlayAttemptMs by remember { mutableStateOf(0L) }
+    var soundCloudStreamCache by remember {
+        mutableStateOf<Map<String, CachedSoundCloudStream>>(emptyMap())
+    }
 
     val eqBands = remember {
         mutableStateListOf<EqBandUi>().apply {
@@ -499,22 +511,68 @@ private fun MusicPlayerScreen(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
+                val normalizedTrackUrl = normalizeTrackUrl(soundCloudUrl)
+                if (normalizedTrackUrl.isBlank()) {
+                    statusMessage = "Enter a SoundCloud track URL."
+                    return@Button
+                }
+                val now = SystemClock.elapsedRealtime()
+                val remainingDebounceMs =
+                    SOUNDCLOUD_PLAY_DEBOUNCE_MS - (now - lastSoundCloudPlayAttemptMs)
+                if (remainingDebounceMs > 0) {
+                    statusMessage = "Please wait ${remainingDebounceMs / 1000.0}s before retrying."
+                    return@Button
+                }
+                lastSoundCloudPlayAttemptMs = now
+
                 scope.launch {
+                    val cacheEntry = soundCloudStreamCache[normalizedTrackUrl]
+                    val isCacheFresh = cacheEntry != null &&
+                        now - cacheEntry.cachedAtElapsedMs <= SOUNDCLOUD_STREAM_CACHE_TTL_MS
+
+                    if (isCacheFresh) {
+                        val mediaItem = MediaItem.Builder()
+                            .setUri(cacheEntry!!.streamUrl)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(soundCloudUrl.trim())
+                                    .build()
+                            )
+                            .build()
+                        ensurePlaybackServiceRunning(context)
+                        controlledPlayer.setMediaItem(mediaItem)
+                        controlledPlayer.prepare()
+                        controlledPlayer.play()
+                        statusMessage = "Playing SoundCloud track (cached)."
+                        return@launch
+                    }
+
                     statusMessage = "Resolving SoundCloud stream..."
                     val resolved = withContext(Dispatchers.IO) {
                         soundCloudClient.resolvePlayableStream(
-                            trackUrl = soundCloudUrl.trim(),
+                            trackUrl = normalizedTrackUrl,
                             clientId = soundCloudClientId,
                             accessToken = accessToken.ifBlank { null }
                         )
                     }
-
                     resolved.onSuccess { streamUrl ->
+                        val cacheNow = SystemClock.elapsedRealtime()
+                        val prunedCache = soundCloudStreamCache
+                            .filterValues {
+                                cacheNow - it.cachedAtElapsedMs <= SOUNDCLOUD_STREAM_CACHE_TTL_MS
+                            }
+                            .toMutableMap()
+                        prunedCache[normalizedTrackUrl] = CachedSoundCloudStream(
+                            streamUrl = streamUrl,
+                            cachedAtElapsedMs = cacheNow
+                        )
+                        soundCloudStreamCache = prunedCache
+
                         val mediaItem = MediaItem.Builder()
                             .setUri(streamUrl)
                             .setMediaMetadata(
                                 MediaMetadata.Builder()
-                                    .setTitle(soundCloudUrl)
+                                    .setTitle(soundCloudUrl.trim())
                                     .build()
                             )
                             .build()
@@ -850,4 +908,8 @@ private fun formatMs(valueMs: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%02d:%02d".format(minutes, seconds)
+}
+
+private fun normalizeTrackUrl(raw: String): String {
+    return raw.trim()
 }
